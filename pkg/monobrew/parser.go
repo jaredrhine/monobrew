@@ -21,7 +21,6 @@ type Parser struct {
 	config        *Config
 	state         int
 	endToken      string
-	verbose       bool
 	currentFile   string
 	currentBlock  *Block
 	currentLine   int
@@ -29,7 +28,7 @@ type Parser struct {
 }
 
 func NewParser(config *Config) *Parser {
-	return &Parser{config: config, state: TopLevel, verbose: true}
+	return &Parser{config: config, state: TopLevel}
 }
 
 // This is an intentionally hacky, hard-coded parser. Replace as codebase stabilizes.
@@ -66,8 +65,8 @@ func (p *Parser) ParseConfig(body io.Reader) {
 			if strings.HasPrefix(line, "new-op") {
 				v("DefiningBlock: was defining block, found start of new block")
 				p.StartBlock(line)
-			} else if strings.HasPrefix(line, "script regsh until") { // TODO: fixup with regexp
-				v("DefiningBlock: found start of script")
+			} else if strings.HasPrefix(line, "exec shell until") { // TODO: fixup with regexp
+				v("DefiningBlock: found start of exec")
 				parts := regexp.MustCompile(`\s+`).Split(line, 4)
 				p.currentBlock.Command = "sh"
 				p.currentBlock.Args = []string{"-sex"}
@@ -153,7 +152,7 @@ func (p *Parser) StoreBlock() {
 }
 
 func (p *Parser) verbmsg(msg string) {
-	if p.verbose {
+	if p.config.PrintDebug {
 		fmt.Println(msg)
 	}
 }

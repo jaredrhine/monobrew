@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type Block struct {
@@ -45,7 +47,9 @@ type Config struct {
 	Blocks []*Block
 	Status map[string]string
 
-	PrintVerboseResult bool
+	PrintVerboseResult  bool
+	PrintDebug          bool
+	NukeStateDirAtStart bool
 
 	Parser *Parser
 }
@@ -66,8 +70,16 @@ func (c *Config) OrderedOps() []*Block {
 }
 
 func (c *Config) Load() {
-	mkdirscript := fmt.Sprintf("mkdir -p %s; chmod 700 %s", c.StateDir, c.StateDir)
-	c.AddCmdBlock("make-monobrew-statedir", mkdirscript)
+	var rmdir string
+
+	if c.NukeStateDirAtStart {
+		rmdir = fmt.Sprintf("rm -rf %s; ", c.StateDir)
+	}
+
+	if unix.Access(c.StateDir, unix.W_OK) != nil {
+		mkdirscript := fmt.Sprintf("%smkdir -p %s; chmod 700 %s", rmdir, c.StateDir, c.StateDir)
+		c.AddCmdBlock("make-monobrew-statedir", mkdirscript)
+	}
 }
 
 func (c *Config) InitEnv() {

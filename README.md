@@ -1,6 +1,6 @@
 # Monobrew: A single-binary host configuration management tool
 
-Author: Jared Rhine <jared@wordzoo.com>
+Author: Jared Rhine &lt;jared@wordzoo.com&gt;
 
 Last update: June 2023
 
@@ -8,18 +8,16 @@ Last update: June 2023
 
 I periodically set up new Linux machines (new physical hosts and new VMs), and have particular ways I like to configure those boxes.
 
-All of the common config management tools (chef, puppet, ansible, salt) are based on dynamic/scripting languages and require a substantial runtime installation to function. Installing one isn't necessarily a hard task, but can involve multiple steps on its own.
+The common config management tools (chef, puppet, ansible, salt) are based on dynamic/scripting languages and require a substantial runtime installation to function. Installing one isn't a hard task, but involves multiple steps and has side effects. Docker-related configuration management tools generally don't apply to this use case. Terraform can be configured to run locally but isn't a common mode.
 
-Docker-related configuration management tools generally don't apply to this use case. Terraform can be configured to run locally but isn't a common mode.
+My pile of bootstrapping shell scripts is functional, but I still needed to get ssh set up and check out repos which contained those scripts. Large shell scripts are a maintenance hassle and I dreamt of using a config file instead for my basic "overwrite this file" and "install this package" early bootstrapping needs.
 
-I have a large set of shell scripts I historically used to configure a machine before bootstrapping enough to run a fuller config management suite. But for my usage, I still needed to get ssh set up and check out repos which contained those homedirs. And large shell scripts are a mild maintenance hassle and I dreamt of using a config file instead for the basic "overwrite this file" and "install this package" early bootstrapping primarily requires.
-
-So I found myself just wanting to execute a single command line to start configuring a fresh box. I wanted to just download one file (binary) and run a command. Since golang easily compiles into a single binary, the go-based `monobrew` codebase to provide simple host configuration tasks was born.
+So I found myself just wanting a simple way to download just one file (binary) and run a command pointed at a config file. As golang compiles to a single binary easily, this `monobrew` codebase to provide simple host configuration tasks was born.
 
 ## Use cases
 
 - Setting up a newly-installed Linux host in a repeatable, documented way
-- Keeping machines in sync
+- Keeping machines in sync by using the same configuration files
 
 ## Design goals
 
@@ -82,12 +80,12 @@ All `monobrew` operations are driven by one or more configuration files.
 state-dir /var/tmp/monobrew
 
 new-op initial
-script regsh until ENDBLOCKSCRIPT
+script shell until ENDBLOCKSCRIPT
 echo Hi
 ENDBLOCKSCRIPT
 
 new-op sudo-jared
-script regsh until end
+script shell until end
 echo "jared NOPASSWD: ALL" > /etc/sudoers.d/jared
 end
 
@@ -108,41 +106,43 @@ end
 - Parsing the config file results in an ordered sequence of "ops" (aka "blocks") which are executed by the `Runner` in order.
 - Valid config file directives are:
   - `new-op [LABEL]`
-  - `script regsh until [END]`
+  - `exec shell until [END]`
   - `halt-if-fail`
   - `state-dir [PATH_TO_DIR]`
 - `state-dir [DIRECTORY]`
-  - A `state-dir` directive must be present in the config file and specify a filesystem path to a directory. The path will be created if it doesn't already exist, and `monobrew` will record a number of files to that directory while executing the config.
+  - A `state-dir` directive will change the default `/var/tmp/monobrew` directory to use your preferred directory instead. If present, it must be specify a filesystem path to a directory. The path will be created if it doesn't already exist, and `monobrew` will record a number of files to that directory while executing the config.
 - `new-op [LABEL]`
   - Define a new op using a `new-op` directive. The directives below the `new-op` line
   - Each `new-op` "resets" the block definition to an empty state; all directives specified above the `new-op` line are not persistent. Each `new-op` directive needs a unique "label" placed after `new-op`, like: `new-op delete-all-the-things`. This label is used only for reporting. No whitespace is allowed.
-  - `script regsh until [END]`
-    - Inside (underneath) a `new-op` directive, define a shell script to be executed for that op using `script regsh until [HEREIS]` directive.
+  - `exec shell until [END]`
+    - Inside (underneath) a `new-op` directive, define a shell script to be executed for that op using `exec shell until [HEREIS]` directive.
     - All text between the "script" line and the HEREIS line is used as the body of the script. You can use embedded newlines and indentation as you'd prefer.
-    - `regsh` means "regular shell". The command used for this op will be `/bin/sh` (not BASH), and the `-ex` switches will be set (for "exit on any error" and "trace the script").
+    - `shell` means "regular shell". The command used for this op will be `/bin/sh` (not BASH), and the `-ex` switches will be set (for "exit on any error" and "trace the script").
     - `[HEREIS]` can be any string (square brackets are not required).
+  - `halt-if-fail`
+    - Set `halt-if-fail` within a `new-op` directive to cause `monobrew` to exit if that op returns any exit code except 0 representing success.
 - Comments and whitespace
-  - Blank newlines are ignored (but maintained within `script` tags).
+  - Blank newlines are ignored (but maintained within `exec` tags).
   - Comments are defined by a line starting with a hash character, with optional whitespace before the hash mark.
 - Each execution of a block by the `Runner` records a set of files in the directory specified by the `state-dir` directive. There are three files created:
   - `${SEQUENCE}.${BLOCK-NAME}.output` - the merged stdout + stderr from the executed op
   - `${SEQUENCE}.${BLOCK-NAME}.exitcode` - contains a single line with a single number recording the exit code of the executed op
   - `${SEQUENCE}.${BLOCK-NAME}.run` - JSON file with metadata about the inputs, outputs, and context of the executed op
     - `label` (string) - a unique name for the block, as specified on the `new-op` line
-  	- `opCounter` (integer) - the order or sequence is which this block was run
-  	- `command` (string) - the executable run for this op
-  	- `commandPath` (string) - the full file path to the command, after searching `PATH`
-  	- `args` (list of strings) - the command line parameters passed to the executable
-  	- `stdin` (string) - the standard input that was passed to the executable
-  	- `success` (boolean) - true if the executable run without errors (that is, exit code was 0)
-  	- `exitCode` (integer) - the exit code returned by the completed executable
-  	- `haltIfFail` (boolean) - true if `halt-on-fail` was configured for this op
-  	- `startTime` (iso8601 timestamp) - the timestamp when the executable started to run
-  	- `endTime` (iso8601 timestamp) - the timestamp when the executable completed
-  	- `elapsedTime` (float) - wall-clock time spent by the executable (end time minus start time)
-  	- `runError` (string) - a string recording the error if the executable was not able to be started
-  	- `outputIsEmpty` (boolean) - true if there was no output at all returned by the executable
-  	- `outputFile` (string) - the file path where the combined standard output and standard error from the executable can be found
+    - `opCounter` (integer) - the order or sequence is which this block was run
+    - `command` (string) - the executable run for this op
+    - `commandPath` (string) - the full file path to the command, after searching `PATH`
+    - `args` (list of strings) - the command line parameters passed to the executable
+    - `stdin` (string) - the standard input that was passed to the executable
+    - `success` (boolean) - true if the executable run without errors (that is, exit code was 0)
+    - `exitCode` (integer) - the exit code returned by the completed executable
+    - `haltIfFail` (boolean) - true if `halt-on-fail` was configured for this op
+    - `startTime` (iso8601 timestamp) - the timestamp when the executable started to run
+    - `endTime` (iso8601 timestamp) - the timestamp when the executable completed
+    - `elapsedTime` (float) - wall-clock time spent by the executable (end time minus start time)
+    - `runError` (string) - a string recording the error if the executable was not able to be started
+    - `outputIsEmpty` (boolean) - true if there was no output at all returned by the executable
+    - `outputFile` (string) - the file path where the combined standard output and standard error from the executable can be found
 - _(TODO)_ Whitespace before and after directives is ignored.
 - _(TODO)_ Directives are case insensitive.
 - _(TODO)_ You can split configuration into multiple files using the `include-config` directive.
@@ -154,6 +154,8 @@ end
 
 ## Code structure
 
+- CLI: `cmd/monobrew/main.go`
+  - Handles CLI switches and kicks off a monobrew run
 - Runner: `pkg/monobrew/runner.go`
   - Executes ops in order, recording the state of each
 - Config: `pkg/monobrew/config.go`
@@ -161,7 +163,6 @@ end
 - Parser: `pkg/monobrew/parser.go`
   - Parses `monobrew` config file format
   - Knows how to use local files and perform HTTP fetches
-- CLI: `cmd/monobrew/main.go`
 
 ## Work plan
 
@@ -172,10 +173,14 @@ end
 - ~~Can specify multiple configs~~
 - ~~Config files can be URLs~~
 - ~~Option to exit if command doesn't succeed~~
+- ~~Make state-dir optional via default value~~
+- ~~Rename "script" to "exec"~~
+- include-config
+- Able to set a variable. `var [VARNAME] is [VALUE]` and `var [VARNAME] until [END]`
 - Run only once, tracked via state file
 - Scan machine (like puppet catalog), able to detect OS
 - Package installation
-- Package enforce not present (command-not-found)
+- Ensure a package is not present (command-not-found)
 - Conditional execution for blocks. Only run block if conditional is true.
 - Status data structure maintained
 - Support another shell mode which actually processes stdin (rather than using stdin to pass in script to /bin/sh)
