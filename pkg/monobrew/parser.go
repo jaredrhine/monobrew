@@ -43,8 +43,13 @@ func NewParser(config *Config) *Parser {
 	return &Parser{config: config, state: TopLevel}
 }
 
+func (p *Parser) ParseConfig(body string) {
+	configReader := strings.NewReader(p.config.ConfigExpanded)
+	p.ParseConfigReader(configReader)
+}
+
 // This is an intentionally hacky, hard-coded parser. Replace as codebase and syntax stabilizes.
-func (p *Parser) ParseConfig(body io.Reader) {
+func (p *Parser) ParseConfigReader(body io.Reader) {
 	v := p.verbmsg
 	fileScanner := bufio.NewScanner(body)
 
@@ -259,7 +264,7 @@ func (p *Parser) ParseFilepath(filepath string) {
 	defer readFile.Close()
 
 	p.currentFile = filepath
-	p.ParseConfig(readFile)
+	p.ParseConfigReader(readFile)
 }
 
 func (p *Parser) ExpandConfigs() {

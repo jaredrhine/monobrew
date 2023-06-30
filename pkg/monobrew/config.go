@@ -3,7 +3,6 @@ package monobrew
 import (
 	"encoding/json"
 	"os"
-	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -74,11 +73,8 @@ func (c *Config) OrderedOps() []*Block {
 
 func (c *Config) Load() {
 	c.Scanner.Scan()
-
 	c.Parser.ExpandConfigs()
-	configReader := strings.NewReader(c.ConfigExpanded)
-	c.Parser.ParseConfig(configReader)
-
+	c.Parser.ParseConfig(c.ConfigExpanded)
 	c.EnsureEnv()
 }
 
