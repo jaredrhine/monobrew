@@ -15,6 +15,14 @@ const (
 	DefiningBlock
 	DefiningScript
 	DefiningStdin
+	DefiningVar
+)
+
+const (
+	shellRe   = `^\s*exec\s+shell\s+(from|until)\s+(\S+)`
+	varRe     = `^\s*var\s+(\S+)\s+(is|until)\s+(.+)`
+	commentRe = `^\s*(#|//)`
+	newOpRe   = `^\s*new-op\s+(\S+)`
 )
 
 type Parser struct {
@@ -25,13 +33,16 @@ type Parser struct {
 	currentBlock  *Block
 	currentLine   int
 	currentScript string
+	currentVarKey string
+	currentVar    string
+	inHereis      bool
 }
 
 func NewParser(config *Config) *Parser {
 	return &Parser{config: config, state: TopLevel}
 }
 
-// This is an intentionally hacky, hard-coded parser. Replace as codebase stabilizes.
+// This is an intentionally hacky, hard-coded parser. Replace as codebase and syntax stabilizes.
 func (p *Parser) ParseConfig(body io.Reader) {
 	v := p.verbmsg
 	fileScanner := bufio.NewScanner(body)
@@ -41,54 +52,167 @@ func (p *Parser) ParseConfig(body io.Reader) {
 	for fileScanner.Scan() {
 		p.currentLine += 0
 		line := fileScanner.Text()
-		v("processing line: " + line)
+		v(fmt.Sprint(p.state) + " processing line: " + line)
 
 		/*
-			Complete: state-dir, comments at top-level in or block, new-op
-			In-progress: halt-if-fail
-			On-deck: include-config
+			Complete: comments at top-level in or block, new-op, exec shell from variable, exec shell until end, halt-if-fail, var variable is value
+			In-progress: var variable until end
+			On-deck: include-config, state-dir
 		*/
-		if strings.HasPrefix(line, "#") && (p.state == TopLevel || p.state == DefiningBlock) {
-			v("skipping comment")
 
-		} else if p.state == TopLevel {
-			if strings.HasPrefix(line, "new-op") {
+		shellPat := regexp.MustCompile(shellRe)
+		varPat := regexp.MustCompile(varRe)
+		commentPat := regexp.MustCompile(commentRe)
+		newOpPat := regexp.MustCompile(newOpRe)
+
+		linebytes := []byte(line)
+
+		matchDirective := func(linebytes []byte) (matches bool) {
+			return (newOpPat.Match(linebytes) || varPat.Match(linebytes))
+		}
+
+		// Handle comments by immediately skipping to next line
+		if !p.inHereis && commentPat.Match(linebytes) {
+			v("skipping comment")
+			continue
+		}
+
+		// Handle implicit new-op close. After defining a hereis within a block, we might not notice
+		// the block definition has ended until we see one of these cues. If we see one,
+		// we bump ourselves back to TopLevel parsing.
+		if !p.inHereis && matchDirective(linebytes) {
+			v("spotted valid directive, ending block if needed and resetting to TopLevel")
+			p.StoreBlock()
+			p.state = TopLevel
+		}
+
+		if p.state == TopLevel {
+			v("In TopLevel")
+			if newOpPat.Match(linebytes) {
 				v("TopLevel: starting new block")
-				p.StartBlock(line)
+				p.StartBlock(linebytes)
+				continue
 
 			} else if strings.HasPrefix(line, "state-dir") {
 				v("TopLevel: defining state-dir TODO")
 				// TODO: set state-dir
-			}
+				continue
 
-		} else if p.state == DefiningBlock {
-			if strings.HasPrefix(line, "new-op") {
-				v("DefiningBlock: was defining block, found start of new block")
-				p.StartBlock(line)
-			} else if strings.HasPrefix(line, "exec shell until") { // TODO: fixup with regexp
-				v("DefiningBlock: found start of exec")
-				parts := regexp.MustCompile(`\s+`).Split(line, 4)
+			} else if varPat.Match(linebytes) {
+				v("TopLevel: found var definition")
+				m := varPat.FindSubmatch(linebytes)
+				variable := string(m[1])
+				dir := string(m[2])
+				value := string(m[3])
+				if dir == "is" {
+					v(fmt.Sprintf("TopLevel: setting status %s=%s", variable, value))
+					p.config.SetStatusKey(variable, value)
+				} else if dir == "until" {
+					v(fmt.Sprintf("TopLevel: starting var until for variable=%s", variable))
+					p.state = DefiningVar
+					p.inHereis = true
+					p.currentVar = ""
+					p.currentVarKey = variable
+					p.endToken = value
+				}
+				continue
+			}
+		}
+
+		if p.state == DefiningBlock {
+			v("In DefiningBlock: " + string(linebytes))
+			if shellPat.Match(linebytes) {
+				v("DefiningBlock: found start of exec shell")
+				p.currentBlock.Touched = true
 				p.currentBlock.Command = "sh"
 				p.currentBlock.Args = []string{"-sex"}
-				p.state = DefiningScript
-				p.currentScript = ""
-				p.endToken = parts[3]
+				parts := regexp.MustCompile(`\s+`).Split(line, 4)
+
+				if parts[2] == "until" {
+					v("DefiningBlock: this is a 'exec shell until' block")
+					p.state = DefiningScript
+					p.inHereis = true
+					p.currentScript = ""
+					p.endToken = parts[3]
+				} else if parts[2] == "from" {
+					v("DefiningBlock: this is a 'exec shell from' block")
+					variable := parts[3]
+					value := p.config.GetStatusKey(variable)
+					v(fmt.Sprintf("DefiningBlock: got status key=%s val=%s", variable, value))
+					p.currentBlock.Stdin = value
+				}
+				continue
+
 			} else if strings.HasPrefix(line, "halt-if-fail") {
 				p.currentBlock.HaltIfFail = true
+				p.currentBlock.Touched = true
+				continue
+			} else {
+				v("Unknown line in DefiningBlock")
+				continue
 			}
+		}
 
-		} else if p.state == DefiningScript {
+		if p.state == DefiningScript {
+			v("In DefiningScript")
 			if line == p.endToken {
 				v("DefiningScript: found end")
 				p.currentBlock.Stdin = p.currentScript
 				p.state = DefiningBlock
+				p.inHereis = false
+				p.currentBlock.Touched = true
+				continue
 			} else {
 				v("DefiningScript: appending script")
 				p.currentScript = p.currentScript + line + "\n"
+				continue
+			}
+		}
+
+		if p.state == DefiningVar {
+			v("In DefiningVar")
+			if line == p.endToken {
+				v("DefiningVar: found end")
+				p.config.SetStatusKey(p.currentVarKey, p.currentVar)
+				p.currentVarKey = ""
+				p.currentVar = ""
+				p.state = DefiningBlock
+				p.inHereis = false
+				continue
+			} else {
+				v("DefiningVar: appending var")
+				p.currentVar = p.currentVar + line + "\n"
+				continue
 			}
 		}
 	}
+
 	p.StoreBlock()
+}
+
+func (p *Parser) StartBlock(linebytes []byte) {
+	p.verbmsg("StartBlock: start")
+	label := string(regexp.MustCompile(newOpRe).FindSubmatch(linebytes)[1])
+	p.state = DefiningBlock
+	p.StoreBlock()
+	p.currentBlock = &Block{Label: label}
+}
+
+func (p *Parser) StoreBlock() {
+	// We'll only store blocks if they have been modified
+	p.verbmsg("StoreBlock: checking if currentBlock has been touched")
+	if p.currentBlock != nil && p.currentBlock.Touched {
+
+		// Make single-line scripts not have a trailing newline
+		if strings.Count(p.currentBlock.Stdin, "\n") == 1 {
+			p.currentBlock.Stdin = strings.TrimRight(p.currentBlock.Stdin, "\n")
+		}
+
+		// Add the presumed-completed block to the config
+		p.verbmsg(fmt.Sprintf("StoreBlock: storing previous block - %#v", p.currentBlock))
+		p.config.Blocks = append(p.config.Blocks, p.currentBlock)
+		p.currentBlock = &Block{}
+	}
 }
 
 func (p *Parser) ParseFile(file string) {
@@ -121,34 +245,6 @@ func (p *Parser) ParseFilepath(filepath string) {
 
 	p.currentFile = filepath
 	p.ParseConfig(readFile)
-}
-
-func (p *Parser) StartBlock(line string) {
-	p.verbmsg("StartBlock: start")
-	parts := regexp.MustCompile(`\s+`).Split(line, 3)
-	if len(parts) < 2 {
-		p.parseError("incorrect number of parts on 'new-op' line")
-	}
-
-	p.state = DefiningBlock
-	p.StoreBlock()
-	p.currentBlock = &Block{Touched: true, Label: parts[1]}
-}
-
-func (p *Parser) StoreBlock() {
-	// We'll only store blocks if they have been modified
-	p.verbmsg("StoreBlock: checking if currentBlock has been touched")
-	if p.currentBlock != nil && p.currentBlock.Touched {
-
-		// Make single-line scripts not have a trailing newline
-		if strings.Count(p.currentBlock.Stdin, "\n") == 1 {
-			p.currentBlock.Stdin = strings.TrimRight(p.currentBlock.Stdin, "\n")
-		}
-
-		// Add the presumed-completed block to the config
-		p.verbmsg(fmt.Sprintf("StoreBlock: storing previous block - %#v", p.currentBlock))
-		p.config.Blocks = append(p.config.Blocks, p.currentBlock)
-	}
 }
 
 func (p *Parser) verbmsg(msg string) {

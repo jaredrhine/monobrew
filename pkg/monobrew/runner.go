@@ -33,10 +33,10 @@ func (r *Runner) RunOps() {
 				fmt.Println()
 			}
 			fmt.Printf("--- op #%v --> %v ---------------\n", r.OpCounter, op.Label)
-			fmt.Printf("command: %s %s\n", op.Command, strings.Join(op.Args, " "))
-			fmt.Printf("stdin: %v\n", op.Stdin)
+			fmt.Printf("command: %s %s\n", op.CommandPath, strings.Join(op.Args, " "))
 			fmt.Printf("exit code: %v\n", op.ExitCode)
-			fmt.Printf("output: %v\n", strings.TrimSpace(op.Stdouterr))
+			fmt.Printf("(stdin)\n%s\n", op.Stdin)
+			fmt.Printf("(output)\n%s\n", strings.TrimSpace(op.Stdouterr))
 		}
 
 		if op.HaltIfFail && !op.Success {

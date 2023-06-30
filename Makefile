@@ -1,7 +1,7 @@
 BINARY_NAME=monobrew
 BINARY=dist/${BINARY_NAME}
 
-build:
+build: pkg/monobrew/*.go
 	go build -o ${BINARY} -ldflags="-s -w" cmd/monobrew/main.go
 
 run: build

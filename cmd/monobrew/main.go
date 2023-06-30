@@ -38,9 +38,8 @@ func main() {
 	config.PrintDebug = veryVerbose
 	config.NukeStateDirAtStart = nuke
 	config.AddConfigFile(string(configFile))
-	config.Init()
+	config.Load()
 
 	runner := monobrew.NewRunner(config)
-	runner.Scan()
 	runner.RunOps()
 }

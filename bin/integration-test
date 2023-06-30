@@ -1,0 +1,86 @@
+#!/bin/sh
+
+DIR=/var/tmp/monobrew
+
+make -s
+dist/monobrew --nuke --config conf/monobrew-test.conf
+
+chkout () {
+  filebase=$1
+  expect=$(cat)
+  file=$DIR/*.$filebase.output
+  filesum=$(cat $file | md5sum | awk '{print $1}')
+  expectsum=$(printf '%s\n' "$expect" | md5sum | awk '{print $1}')
+  if [ "x$filesum" != "x$expectsum" ]; then
+    echo ERROR: op \'$filebase\' output does not match:
+    echo EXPECTED
+    cat $file
+    echo GOT
+    echo "$expect"
+    exit 1
+  fi
+}
+
+chkcode () {
+  filebase=$1
+  expect=$2
+  file=$DIR/*.$filebase.exitcode
+  filecode=$(cat $file)
+  if [ "x$filecode" != "x$expect" ]; then
+    echo ERROR: op \'$filebase\' exit code does not match:
+    echo EXPECTED: $expect
+    echo GOT: $filecode
+    exit 1
+  fi
+}
+
+chkout shell-echo <<EOM
++ echo foo
+foo
+EOM
+
+chkout second-block <<EOM
++ echo bar
+bar
+EOM
+
+chkout multiline <<EOM
++ echo beep
+beep
++ echo boop
+boop
+EOM
+
+grep -q PATH $DIR/*.pass-on-env.output
+if [ "x$?" != "x0"  ]; then
+  echo ERROR: no PATH found in $DIR/*.pass-on-env.output
+  exit 1
+fi
+
+chkout record-failing-command <<EOM
++ exit 123
+EOM
+
+chkcode record-failing-command 123
+
+chkout shell-from-scanned-string <<EOM
++ 1
+/bin/sh: 1: 1: not found
+EOM
+
+chkout shell-from-var-first <<EOM
++ echo test 1-liner
+test 1-liner
+EOM
+
+chkout shell-from-var-reuse <<EOM
++ echo test 1-liner
+test 1-liner
+EOM
+
+chkout shell-from-var-multiline <<EOM
++ echo multi
+multi
++ echo line
+line
+EOM

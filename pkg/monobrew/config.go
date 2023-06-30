@@ -2,7 +2,6 @@ package monobrew
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"time"
 
@@ -51,7 +50,8 @@ type Config struct {
 	PrintDebug          bool
 	NukeStateDirAtStart bool
 
-	Parser *Parser
+	Parser  *Parser
+	Scanner *Scanner
 }
 
 func NewConfig() *Config {
@@ -62,6 +62,7 @@ func NewConfig() *Config {
 		Status:             make(map[string]string, 0),
 	}
 	config.Parser = NewParser(config)
+	config.Scanner = NewScanner(config)
 	return config
 }
 
@@ -69,30 +70,27 @@ func (c *Config) OrderedOps() []*Block {
 	return c.Blocks
 }
 
-func (c *Config) Load() {
-	var rmdir string
-
+func (c *Config) EnsureEnv() {
 	if c.NukeStateDirAtStart {
-		rmdir = fmt.Sprintf("rm -rf %s; ", c.StateDir)
+		err := os.RemoveAll(c.StateDir)
+		if err != nil {
+			panic("problems nuking directory " + c.StateDir)
+		}
 	}
 
 	if unix.Access(c.StateDir, unix.W_OK) != nil {
-		mkdirscript := fmt.Sprintf("%smkdir -p %s; chmod 700 %s", rmdir, c.StateDir, c.StateDir)
-		c.AddCmdBlock("make-monobrew-statedir", mkdirscript)
+		os.MkdirAll(c.StateDir, os.ModePerm)
 	}
 }
 
-func (c *Config) InitEnv() {
-	err := os.MkdirAll(c.StateDir, 0755)
-	PanicIfErr(err)
-}
+func (c *Config) Load() {
+	c.Scanner.Scan()
 
-func (c *Config) Init() {
-	c.Load()
-	c.InitEnv()
 	for _, cfg := range c.ConfigFiles {
 		c.Parser.ParseFile(cfg)
 	}
+
+	c.EnsureEnv()
 }
 
 func (c *Config) AddConfigFile(file string) {
@@ -102,6 +100,14 @@ func (c *Config) AddConfigFile(file string) {
 func (c *Config) AddCmdBlock(name string, command string) {
 	b := CmdBlock(name, command)
 	c.Blocks = append(c.Blocks, b)
+}
+
+func (c *Config) GetStatusKey(key string) string {
+	return c.Status[key]
+}
+
+func (c *Config) SetStatusKey(key string, value string) {
+	c.Status[key] = value
 }
 
 func CmdBlock(label string, command string) *Block {
