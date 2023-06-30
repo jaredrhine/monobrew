@@ -84,3 +84,13 @@ multi
 + echo line
 line
 EOM
+
+chkout nested-include-1 <<EOM
++ echo from include-test-1.conf
+from include-test-1.conf
+EOM
+
+chkout nested-include-2 <<EOM
++ echo from include-test-2.conf
+from include-test-2.conf
+EOM

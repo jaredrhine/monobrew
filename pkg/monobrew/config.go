@@ -3,6 +3,7 @@ package monobrew
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -40,8 +41,9 @@ func (b *Block) MarshalJSON() ([]byte, error) {
 }
 
 type Config struct {
-	StateDir    string
-	ConfigFiles []string
+	StateDir       string
+	ConfigFiles    []string
+	ConfigExpanded string
 
 	Blocks []*Block
 	Status map[string]string
@@ -70,6 +72,16 @@ func (c *Config) OrderedOps() []*Block {
 	return c.Blocks
 }
 
+func (c *Config) Load() {
+	c.Scanner.Scan()
+
+	c.Parser.ExpandConfigs()
+	configReader := strings.NewReader(c.ConfigExpanded)
+	c.Parser.ParseConfig(configReader)
+
+	c.EnsureEnv()
+}
+
 func (c *Config) EnsureEnv() {
 	if c.NukeStateDirAtStart {
 		err := os.RemoveAll(c.StateDir)
@@ -81,20 +93,6 @@ func (c *Config) EnsureEnv() {
 	if unix.Access(c.StateDir, unix.W_OK) != nil {
 		os.MkdirAll(c.StateDir, os.ModePerm)
 	}
-}
-
-func (c *Config) Load() {
-	c.Scanner.Scan()
-
-	for _, cfg := range c.ConfigFiles {
-		c.Parser.ParseFile(cfg)
-	}
-
-	c.EnsureEnv()
-}
-
-func (c *Config) AddConfigFile(file string) {
-	c.ConfigFiles = append(c.ConfigFiles, file)
 }
 
 func (c *Config) AddCmdBlock(name string, command string) {

@@ -115,15 +115,20 @@ end
   - Define a new op using a `new-op` directive. The directives below the `new-op` line
   - Each `new-op` "resets" the block definition to an empty state; all directives specified above the `new-op` line are not persistent. Each `new-op` directive needs a unique "label" placed after `new-op`, like: `new-op delete-all-the-things`. This label is used only for reporting. No whitespace is allowed.
   - `exec shell until [END]`
-    - Inside (underneath) a `new-op` directive, define a shell script to be executed for that op using `exec shell until [HEREIS]` directive.
-    - All text between the "script" line and the HEREIS line is used as the body of the script. You can use embedded newlines and indentation as you'd prefer.
+    - Inside (underneath) a `new-op` directive, define a shell script to be executed for that op using `exec shell until [HEREDOC]` directive.
+    - All text between the "script" line and the HEREDOC line is used as the body of the script. You can use embedded newlines and indentation as you'd prefer.
     - `shell` means "regular shell". The command used for this op will be `/bin/sh` (not BASH), and the `-ex` switches will be set (for "exit on any error" and "trace the script").
-    - `[HEREIS]` can be any string (square brackets are not required).
+    - `[HEREDOC]` can be any string (square brackets are not required).
   - `halt-if-fail`
     - Set `halt-if-fail` within a `new-op` directive to cause `monobrew` to exit if that op returns any exit code except 0 representing success.
+- `include-config [CONFIG_PATH]`
+  - You can split configuration into multiple files using the `include-config` directive.
+  - Both local files and URLs are supported in `[CONFIG_PATH]` argument (which is required).
+  - For local file config paths, the working directory is whatever directory monobrew was started from.
 - Comments and whitespace
   - Blank newlines are ignored (but maintained within `exec` tags).
   - Comments are defined by a line starting with a hash character, with optional whitespace before the hash mark.
+  - Whitespace before and after directives is ignored.
 - Each execution of a block by the `Runner` records a set of files in the directory specified by the `state-dir` directive. There are three files created:
   - `${SEQUENCE}.${BLOCK-NAME}.output` - the merged stdout + stderr from the executed op
   - `${SEQUENCE}.${BLOCK-NAME}.exitcode` - contains a single line with a single number recording the exit code of the executed op
@@ -143,9 +148,7 @@ end
     - `runError` (string) - a string recording the error if the executable was not able to be started
     - `outputIsEmpty` (boolean) - true if there was no output at all returned by the executable
     - `outputFile` (string) - the file path where the combined standard output and standard error from the executable can be found
-- _(TODO)_ Whitespace before and after directives is ignored.
 - _(TODO)_ Directives are case insensitive.
-- _(TODO)_ You can split configuration into multiple files using the `include-config` directive.
 - _(TODO)_ Each script block is executed in a separate and concurrent goroutine.
 - _(TODO)_ Any executed block without a `parallel` directive causes the `Runner` to wait for the script to exit before proceeding.
 - _(TODO)_ You can wait for all previous blocks to exit by placing a `wait-for-all-to-exit` directive, as many times as needed.
@@ -175,17 +178,17 @@ end
 - ~~Option to exit if command doesn't succeed~~
 - ~~Make state-dir optional via default value~~
 - ~~Rename "script" to "exec"~~
-- include-config
-- Able to set a variable. `var [VARNAME] is [VALUE]` and `var [VARNAME] until [END]`
+- ~~Able to set a variable. `var [VARNAME] is [VALUE]` and `var [VARNAME] until [END]`~~
+- ~~Integration test (checking captured output of a checked-in test config)~~
+- ~~Support using multiple --config~~
+- ~~include-config~~
+- Package installation
 - Run only once, tracked via state file
 - Scan machine (like puppet catalog), able to detect OS
-- Package installation
 - Ensure a package is not present (command-not-found)
 - Conditional execution for blocks. Only run block if conditional is true.
 - Status data structure maintained
-- Support another shell mode which actually processes stdin (rather than using stdin to pass in script to /bin/sh)
 - Golang template processing
-- Auto-add a trap to beginning of script block
 - Able to set own shell or direct command
 - Loop over and fetch configs up-front then concatenate, then parse to load definitions, then parse again to execute(?)
 - git checkout
@@ -193,20 +196,28 @@ end
 - git gc
 - asdf install
 - asdf refresh
-- Support command timeout, using os.exec.CommandContext
 - Support setting env vars
 - Handle reuse of new-op label (either redefine with warning or panic)
 - Record user the command was run as
 - Blocks are run in goroutines
 - Optionally blow away the state dir before the run
 - Usage docs
-- Library of built-ins TBD
-- Utility function to map string to boolean (t/f/yes/no/true/false/0/1)
 - Multipass config parsing. Able to define scripts below their usage.
 - Sudoers setup
 - Tests
+
+Maybe:
+
+- Support another shell mode which actually processes stdin (rather than using stdin to pass in script to /bin/sh)
+- Auto-add a trap to beginning of script block
+- Support command timeout, using os.exec.CommandContext
+- Library of built-ins TBD
+- Utility function to map string to boolean (t/f/yes/no/true/false/0/1)
 - Run ops in a way to be able to monitor the output while it's running, for long running scripts
 - Run as user
+
+Unlikely:
+
 - RedHat heritage
 
 ## Design notes

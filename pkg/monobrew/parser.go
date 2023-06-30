@@ -19,10 +19,11 @@ const (
 )
 
 const (
-	shellRe   = `^\s*exec\s+shell\s+(from|until)\s+(\S+)`
-	varRe     = `^\s*var\s+(\S+)\s+(is|until)\s+(.+)`
 	commentRe = `^\s*(#|//)`
-	newOpRe   = `^\s*new-op\s+(\S+)`
+	includeRe = `(?mi)^\s*include-config\s+(\S+)$`
+	newOpRe   = `(?i)^\s*new-op\s+(\S+)`
+	shellRe   = `(?i)^\s*exec\s+shell\s+(from|until)\s+(\S+)`
+	varRe     = `(?i)^\s*var\s+(\S+)\s+(is|until)\s+(.+)`
 )
 
 type Parser struct {
@@ -55,15 +56,15 @@ func (p *Parser) ParseConfig(body io.Reader) {
 		v(fmt.Sprint(p.state) + " processing line: " + line)
 
 		/*
-			Complete: comments at top-level in or block, new-op, exec shell from variable, exec shell until end, halt-if-fail, var variable is value
-			In-progress: var variable until end
-			On-deck: include-config, state-dir
+			Complete: comments at top-level in or block, new-op, exec shell from variable, exec shell until end, halt-if-fail, var variable is value, var variable until end, include-config
+			In-progress:
+			On-deck: state-dir
 		*/
 
-		shellPat := regexp.MustCompile(shellRe)
-		varPat := regexp.MustCompile(varRe)
 		commentPat := regexp.MustCompile(commentRe)
 		newOpPat := regexp.MustCompile(newOpRe)
+		shellPat := regexp.MustCompile(shellRe)
+		varPat := regexp.MustCompile(varRe)
 
 		linebytes := []byte(line)
 
@@ -126,15 +127,16 @@ func (p *Parser) ParseConfig(body io.Reader) {
 				p.currentBlock.Touched = true
 				p.currentBlock.Command = "sh"
 				p.currentBlock.Args = []string{"-sex"}
-				parts := regexp.MustCompile(`\s+`).Split(line, 4)
+				parts := regexp.MustCompile(`\s+`).Split(line, 4) // TODO: switch to shellPat reuse
 
-				if parts[2] == "until" {
+				mode := strings.ToLower(parts[2])
+				if mode == "until" {
 					v("DefiningBlock: this is a 'exec shell until' block")
 					p.state = DefiningScript
 					p.inHereis = true
 					p.currentScript = ""
 					p.endToken = parts[3]
-				} else if parts[2] == "from" {
+				} else if mode == "from" {
 					v("DefiningBlock: this is a 'exec shell from' block")
 					variable := parts[3]
 					value := p.config.GetStatusKey(variable)
@@ -143,7 +145,7 @@ func (p *Parser) ParseConfig(body io.Reader) {
 				}
 				continue
 
-			} else if strings.HasPrefix(line, "halt-if-fail") {
+			} else if strings.HasPrefix(line, "halt-if-fail") { // TODO: regexp for case insensitive
 				p.currentBlock.HaltIfFail = true
 				p.currentBlock.Touched = true
 				continue
@@ -215,27 +217,40 @@ func (p *Parser) StoreBlock() {
 	}
 }
 
-func (p *Parser) ParseFile(file string) {
+func (p *Parser) GetConfigContents(path string) string {
 	pat := regexp.MustCompile(`^https?://`)
-	if pat.Match([]byte(file)) {
-		p.ParseUrl(file)
+	var contents string
+	if pat.Match([]byte(path)) {
+		contents = p.GetUrlContents(path)
 	} else {
-		p.ParseFilepath(file)
+		contents = p.GetFileContents(path)
 	}
+	return contents
 }
 
-func (p *Parser) ParseUrl(url string) {
+func (p *Parser) GetFileContents(filepath string) string {
+	readFile, err := os.Open(filepath)
+	PanicIfErr(err)
+	defer readFile.Close()
+
+	bodystr, err := io.ReadAll(readFile)
+	PanicIfErr(err)
+	return string(bodystr)
+}
+
+func (p *Parser) GetUrlContents(url string) string {
 	resp, err := http.Get(url)
 	if err != nil {
-		p.parseError("can't fetch url: " + url)
+		PanicMsg("can't fetch url: " + url)
 	}
 
 	if resp.StatusCode != 200 {
-		p.warnmsg("Did not get an HTTP 200 back from " + url)
+		WarnMsg("Did not get an HTTP 200 back from " + url)
 	}
 
-	p.currentFile = url
-	p.ParseConfig(resp.Body)
+	bodystr, err := io.ReadAll(resp.Body)
+	PanicIfErr(err)
+	return string(bodystr)
 }
 
 func (p *Parser) ParseFilepath(filepath string) {
@@ -247,17 +262,54 @@ func (p *Parser) ParseFilepath(filepath string) {
 	p.ParseConfig(readFile)
 }
 
+func (p *Parser) ExpandConfigs() {
+	p.config.ConfigExpanded = ""
+
+	// Start with the config paths specified on the command line
+	for _, cfg := range p.config.ConfigFiles {
+		p.AppendConfigToExpanded(cfg)
+	}
+
+	includePat := regexp.MustCompile(includeRe)
+
+	includesFound := true
+	loops := 0
+
+	// Keep looping
+	for includesFound {
+		// But exit if we hit an infinite loop of expansion
+		loops += 1
+		if loops > 1000 {
+			PanicMsg("exceeded include depth, probably have circular includes")
+		}
+
+		// Given "include-config foo", replace the whole string with the contents of "foo"
+		replaceFunc := func(in []byte) (out []byte) {
+			trimmedIn := []byte(strings.TrimSpace(string(in)))
+			parts := includePat.FindSubmatch(trimmedIn)
+			path := string(parts[1])
+			replacement := "\n# Expanded from: " + string(trimmedIn) + "\n\n"
+			replacement += p.GetConfigContents(path)
+			return []byte(replacement)
+		}
+
+		p.config.ConfigExpanded = string(includePat.ReplaceAllFunc([]byte(p.config.ConfigExpanded), replaceFunc))
+
+		if !includePat.Match([]byte(p.config.ConfigExpanded)) {
+			includesFound = false
+		}
+	}
+}
+
+func (p *Parser) AppendConfigToExpanded(configpath string) {
+	contents := p.GetConfigContents(configpath)
+	p.config.ConfigExpanded += contents
+}
+
+// Logging and controlled exit
+
 func (p *Parser) verbmsg(msg string) {
 	if p.config.PrintDebug {
 		fmt.Println(msg)
 	}
-}
-
-func (p *Parser) warnmsg(msg string) {
-	fmt.Printf("WARNING - %s\n", msg)
-}
-
-func (p *Parser) parseError(msg string) {
-	msg = fmt.Sprintf("EXITING - parse error on file %s line %d - %s\n", p.currentFile, p.currentLine, msg)
-	panic(msg)
 }
